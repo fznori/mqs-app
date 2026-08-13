@@ -128,7 +128,7 @@ button.confirming { background: var(--warn); color: #000; }
 
 <header>
   <h1>MATRIX <span>QUICK SHIFTER</span></h1>
-  <div class="sub">MQS SETUP v3</div>
+  <div class="sub">MQS SETUP v4</div>
 </header>
 
 <div id="connBar"><div id="connDot"></div><span id="connText">未接続</span></div>
@@ -254,127 +254,173 @@ window.addEventListener("unhandledrejection", function (e) {
 
 <script>
 "use strict";
+/* このブロックはBluefy(WKWebView)の古いJSエンジンでも確実に構文解析できるよう、
+   ES5構文のみで記述する(async/await・アロー関数・const/let・分割代入は使用禁止)。
+   ロジックはファームウェア BleService.h の仕様と一致させること。 */
+
 // 診断用ビーコン: メインスクリプトがどこまで実行されたかを接続バーに表示する
 document.getElementById("connText").textContent = "未接続 (JS起動中...)";
-/* =========================================================
-   BLE仕様(ファームウェア BleService.h と一致させること)
-   ========================================================= */
-const UUID = {
+
+/* ---- BLE仕様定義 ---- */
+var UUID = {
   service:    "03499168-8788-477c-9319-e68a1b015315",
   status:     "6182d01c-26e5-4ac4-b195-911e782212dc",
   config:     "8458a2f4-acc4-4fce-bba9-41f04fe07ac8",
   cutMap:     "06ad684d-329a-4596-aa2a-080a0f2c28d2",
   command:    "d8c45f83-c43f-4abc-adcd-444ea10c4b52",
   deviceInfo: "7386b66d-cfe4-404e-8cec-92ead38837db",
-  apPass:     "2f7a9c41-58e6-4d02-9b83-c15e6a04d7f8",
+  apPass:     "2f7a9c41-58e6-4d02-9b83-c15e6a04d7f8"
 };
-const CMD = { SAVE: 0x01, ENTER_OTA: 0x02, FACTORY_RESET: 0x03 };
-const ERR_BITS = [
+var CMD = { SAVE: 0x01, ENTER_OTA: 0x02, FACTORY_RESET: 0x03 };
+var ERR_BITS = [
   [0x0001, "ギアポジション入力異常(センサー/配線を確認)"],
   [0x0002, "設定データが初期化されました(要再設定)"],
-  [0x0004, "カットタイムマップが初期化されました(要再設定)"],
+  [0x0004, "カットタイムマップが初期化されました(要再設定)"]
 ];
 // Config.hのテーブルと一致させること
-const COOL_TABLE = [200,250,300,350,400,450,500,550,600,650,700,750,800,850,900,950];
-const DELAY_TABLE = [0,5,10,15,20,25,30,40,50,60,80,100,120,140,170,200];
-const CUT_MIN_MS = 50, CUT_STEP_MS = 5, CUT_LEVELS = 15;
-const BANDS = ["Low", "Mid", "Hi"], GEARS = 6;
+var COOL_TABLE = [200,250,300,350,400,450,500,550,600,650,700,750,800,850,900,950];
+var DELAY_TABLE = [0,5,10,15,20,25,30,40,50,60,80,100,120,140,170,200];
+var CUT_MIN_MS = 50, CUT_STEP_MS = 5, CUT_LEVELS = 15;
+var BANDS = ["Low", "Mid", "Hi"], GEARS = 6;
 
-/* ========================================================= */
-let device = null, chars = {};
+var device = null, chars = {};
 
-const $ = (id) => document.getElementById(id);
+function $(id) { return document.getElementById(id); }
+
 function toast(msg) {
-  const t = $("toast");
+  var t = $("toast");
   t.textContent = msg;
   t.classList.add("show");
   clearTimeout(t._tm);
-  t._tm = setTimeout(() => t.classList.remove("show"), 2200);
+  t._tm = setTimeout(function () { t.classList.remove("show"); }, 2200);
 }
 
 /* ---- タブ切り替え ---- */
-document.querySelectorAll("nav button").forEach(btn => {
-  btn.addEventListener("click", () => {
-    document.querySelectorAll("nav button").forEach(b => b.classList.remove("active"));
-    document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+(function () {
+  var btns = document.querySelectorAll("nav button");
+  function activate(btn) {
+    var i, all = document.querySelectorAll("nav button"),
+        tabs = document.querySelectorAll(".tab");
+    for (i = 0; i < all.length; i++) all[i].classList.remove("active");
+    for (i = 0; i < tabs.length; i++) tabs[i].classList.remove("active");
     btn.classList.add("active");
-    $("tab-" + btn.dataset.tab).classList.add("active");
-  });
-});
+    $("tab-" + btn.getAttribute("data-tab")).classList.add("active");
+  }
+  for (var i = 0; i < btns.length; i++) {
+    (function (btn) {
+      btn.addEventListener("click", function () { activate(btn); });
+    })(btns[i]);
+  }
+})();
 
 /* ---- UI初期化 ---- */
 function fillLevelSelect(sel, table, unit) {
-  table.forEach((ms, lv) => {
-    const o = document.createElement("option");
+  for (var lv = 0; lv < table.length; lv++) {
+    var o = document.createElement("option");
     o.value = lv;
-    o.textContent = ms + unit + " (Lv" + lv + ")";
+    o.textContent = table[lv] + unit + " (Lv" + lv + ")";
     sel.appendChild(o);
-  });
+  }
 }
 fillLevelSelect($("selCool"), COOL_TABLE, "ms");
 fillLevelSelect($("selDelay"), DELAY_TABLE, "ms");
 
 (function buildMapTable() {
-  const tbl = $("mapTable");
-  let html = "<tr><th></th>";
-  for (let g = 1; g <= GEARS; g++) html += "<th>" + g + "速</th>";
+  var html = "<tr><th></th>", g, b, lv;
+  for (g = 1; g <= GEARS; g++) html += "<th>" + g + "速</th>";
   html += "</tr>";
-  BANDS.forEach((band, b) => {
-    html += "<tr><th>" + band + "</th>";
-    for (let g = 0; g < GEARS; g++) {
+  for (b = 0; b < BANDS.length; b++) {
+    html += "<tr><th>" + BANDS[b] + "</th>";
+    for (g = 0; g < GEARS; g++) {
       html += '<td><select class="mapCell" data-i="' + (b * GEARS + g) + '">';
-      for (let lv = 0; lv < CUT_LEVELS; lv++) {
+      for (lv = 0; lv < CUT_LEVELS; lv++) {
         html += '<option value="' + lv + '">' + (CUT_MIN_MS + lv * CUT_STEP_MS) + "</option>";
       }
       html += "</select></td>";
     }
     html += "</tr>";
-  });
-  tbl.innerHTML = html;
+  }
+  $("mapTable").innerHTML = html;
 })();
 
 function setConnectedUi(on) {
-  $("connDot").classList.toggle("on", on);
+  var ids = ["btnWriteConfig","btnWritePass","btnReadPass","btnSave","btnFactory",
+             "btnWriteMap","btnReloadMap","btnOta"];
+  if (on) { $("connDot").classList.add("on"); } else { $("connDot").classList.remove("on"); }
   $("connText").textContent = on ? "接続中: " + (device ? device.name : "") : "未接続";
   $("btnDisconnect").disabled = !on;
-  ["btnWriteConfig","btnWritePass","btnReadPass","btnSave","btnFactory",
-   "btnWriteMap","btnReloadMap","btnOta"].forEach(id => $(id).disabled = !on);
+  for (var i = 0; i < ids.length; i++) $(ids[i]).disabled = !on;
   $("btnConnect").disabled = on;
 }
 
-/* ---- 接続処理 ---- */
-$("btnConnect").addEventListener("click", async () => {
+/* ---- バイト列⇔文字列(TextDecoder/TextEncoder非搭載環境のフォールバック付き) ---- */
+function decodeText(dv) {
+  var buf = dv.buffer ? dv.buffer : dv;
+  if (window.TextDecoder) return new TextDecoder().decode(buf);
+  var u8 = new Uint8Array(buf), s = "";
+  for (var i = 0; i < u8.length; i++) s += String.fromCharCode(u8[i]);
+  return s;
+}
+function encodeText(str) {
+  if (window.TextEncoder) return new TextEncoder().encode(str);
+  var u8 = new Uint8Array(str.length);
+  for (var i = 0; i < str.length; i++) u8[i] = str.charCodeAt(i) & 0xFF;
+  return u8;
+}
+
+/* ---- 接続処理(Promiseチェーン方式) ---- */
+$("btnConnect").addEventListener("click", function () {
   if (!navigator.bluetooth) {
     toast("このブラウザはWeb Bluetooth非対応です(Bluefyで開いてください)");
     return;
   }
-  try {
-    device = await navigator.bluetooth.requestDevice({
-      filters: [{ services: [UUID.service] }],
+  var service = null;
+  navigator.bluetooth.requestDevice({ filters: [{ services: [UUID.service] }] })
+    .then(function (dev) {
+      device = dev;
+      device.addEventListener("gattserverdisconnected", onDisconnected);
+      return device.gatt.connect();
+    })
+    .then(function (server) {
+      return server.getPrimaryService(UUID.service);
+    })
+    .then(function (svc) {
+      service = svc;
+      var keys = [], k;
+      for (k in UUID) { if (k !== "service") keys.push(k); }
+      var p = Promise.resolve();
+      function addStep(key) {
+        p = p.then(function () {
+          return service.getCharacteristic(UUID[key]).then(function (c) { chars[key] = c; });
+        });
+      }
+      for (var i = 0; i < keys.length; i++) addStep(keys[i]);
+      return p;
+    })
+    .then(function () {
+      return chars.status.startNotifications();
+    })
+    .then(function () {
+      chars.status.addEventListener("characteristicvaluechanged", onStatusNotify);
+      return chars.deviceInfo.readValue();
+    })
+    .then(function (dv) {
+      var ver = decodeText(dv);
+      $("fwVer").textContent = "ファームウェア: v" + ver;
+      $("fwVer2").textContent = "ファームウェア: v" + ver;
+      return readConfig();
+    })
+    .then(function () { return readMap(); })
+    .then(function () {
+      setConnectedUi(true);
+      toast("接続しました");
+    })
+    ["catch"](function (e) {
+      if (e && e.name !== "NotFoundError") toast("接続失敗: " + (e.message || e));
     });
-    device.addEventListener("gattserverdisconnected", onDisconnected);
-    const server = await device.gatt.connect();
-    const service = await server.getPrimaryService(UUID.service);
-    for (const [key, uuid] of Object.entries(UUID)) {
-      if (key === "service") continue;
-      chars[key] = await service.getCharacteristic(uuid);
-    }
-    // Status Notify購読
-    await chars.status.startNotifications();
-    chars.status.addEventListener("characteristicvaluechanged", onStatusNotify);
-    // 初期値読み出し
-    const ver = new TextDecoder().decode((await chars.deviceInfo.readValue()).buffer);
-    $("fwVer").textContent = $("fwVer2").textContent = "ファームウェア: v" + ver;
-    await readConfig();
-    await readMap();
-    setConnectedUi(true);
-    toast("接続しました");
-  } catch (e) {
-    if (e.name !== "NotFoundError") toast("接続失敗: " + e.message);
-  }
 });
 
-$("btnDisconnect").addEventListener("click", () => {
+$("btnDisconnect").addEventListener("click", function () {
   if (device && device.gatt.connected) device.gatt.disconnect();
 });
 
@@ -386,14 +432,14 @@ function onDisconnected() {
 
 /* ---- Status Notify(10バイトv1レイアウト、リトルエンディアン) ---- */
 function onStatusNotify(e) {
-  const dv = e.target.value;
+  var dv = e.target.value;
   if (dv.byteLength < 10 || dv.getUint8(0) !== 0x01) return; // レイアウト不一致は無視
-  const rpm     = dv.getUint16(1, true);
-  const gear    = dv.getUint8(3);
-  const band    = dv.getUint8(4);
-  const cutting = (dv.getUint8(5) & 0x01) !== 0;
-  const lastCut = dv.getUint16(6, true);
-  const errMask = dv.getUint16(8, true);
+  var rpm     = dv.getUint16(1, true);
+  var gear    = dv.getUint8(3);
+  var band    = dv.getUint8(4);
+  var cutting = (dv.getUint8(5) & 0x01) !== 0;
+  var lastCut = dv.getUint16(6, true);
+  var errMask = dv.getUint16(8, true);
 
   $("stGear").textContent = (gear >= 1 && gear <= 6) ? gear : "-";
   $("stRpm").textContent = rpm;
@@ -401,11 +447,14 @@ function onStatusNotify(e) {
   $("stCut").textContent = lastCut > 0 ? lastCut + "ms" : "-";
   $("cutFlag").style.visibility = cutting ? "visible" : "hidden";
 
-  const banner = $("errBanner");
+  var banner = $("errBanner");
   if (errMask !== 0) {
-    banner.innerHTML = ERR_BITS.filter(([bit]) => errMask & bit)
-      .map(([, msg]) => "&#9888; " + msg).join("<br>") ||
-      ("&#9888; 異常コード: 0x" + errMask.toString(16));
+    var msgs = [];
+    for (var i = 0; i < ERR_BITS.length; i++) {
+      if (errMask & ERR_BITS[i][0]) msgs.push("⚠ " + ERR_BITS[i][1]);
+    }
+    if (msgs.length === 0) msgs.push("⚠ 異常コード: 0x" + errMask.toString(16));
+    banner.innerHTML = msgs.join("<br>");
     banner.style.display = "block";
   } else {
     banner.style.display = "none";
@@ -413,79 +462,86 @@ function onStatusNotify(e) {
 }
 
 /* ---- Config(2バイト: [coolLv, delayLv]) ---- */
-async function readConfig() {
-  const dv = await chars.config.readValue();
-  if (dv.byteLength >= 2) {
-    $("selCool").value = dv.getUint8(0);
-    $("selDelay").value = dv.getUint8(1);
-  }
+function readConfig() {
+  return chars.config.readValue().then(function (dv) {
+    if (dv.byteLength >= 2) {
+      $("selCool").value = dv.getUint8(0);
+      $("selDelay").value = dv.getUint8(1);
+    }
+  });
 }
-$("btnWriteConfig").addEventListener("click", async () => {
-  try {
-    await chars.config.writeValue(new Uint8Array([
-      Number($("selCool").value), Number($("selDelay").value),
-    ]));
-    toast("設定を本体へ反映しました");
-  } catch (e) { toast("書き込み失敗: " + e.message); }
+$("btnWriteConfig").addEventListener("click", function () {
+  var payload = new Uint8Array([Number($("selCool").value), Number($("selDelay").value)]);
+  chars.config.writeValue(payload)
+    .then(function () { toast("設定を本体へ反映しました"); })
+    ["catch"](function (e) { toast("書き込み失敗: " + (e.message || e)); });
 });
 
 /* ---- CutMap(18バイト) ---- */
-async function readMap() {
-  const dv = await chars.cutMap.readValue();
-  if (dv.byteLength >= BANDS.length * GEARS) {
-    document.querySelectorAll(".mapCell").forEach(sel => {
-      sel.value = dv.getUint8(Number(sel.dataset.i));
-      sel.classList.remove("dirty");
-    });
-  }
-}
-document.addEventListener("change", (e) => {
-  if (e.target.classList.contains("mapCell")) e.target.classList.add("dirty");
-});
-$("btnWriteMap").addEventListener("click", async () => {
-  const buf = new Uint8Array(BANDS.length * GEARS);
-  document.querySelectorAll(".mapCell").forEach(sel => {
-    buf[Number(sel.dataset.i)] = Number(sel.value);
+function readMap() {
+  return chars.cutMap.readValue().then(function (dv) {
+    if (dv.byteLength >= BANDS.length * GEARS) {
+      var cells = document.querySelectorAll(".mapCell");
+      for (var i = 0; i < cells.length; i++) {
+        cells[i].value = dv.getUint8(Number(cells[i].getAttribute("data-i")));
+        cells[i].classList.remove("dirty");
+      }
+    }
   });
-  try {
-    await chars.cutMap.writeValue(buf);
-    document.querySelectorAll(".mapCell").forEach(s => s.classList.remove("dirty"));
-    toast("マップを本体へ反映しました");
-  } catch (e) { toast("書き込み失敗: " + e.message); }
+}
+document.addEventListener("change", function (e) {
+  if (e.target && e.target.classList && e.target.classList.contains("mapCell")) {
+    e.target.classList.add("dirty");
+  }
 });
-$("btnReloadMap").addEventListener("click", async () => {
-  try { await readMap(); toast("本体から再読込しました"); }
-  catch (e) { toast("読込失敗: " + e.message); }
+$("btnWriteMap").addEventListener("click", function () {
+  var buf = new Uint8Array(BANDS.length * GEARS);
+  var cells = document.querySelectorAll(".mapCell");
+  for (var i = 0; i < cells.length; i++) {
+    buf[Number(cells[i].getAttribute("data-i"))] = Number(cells[i].value);
+  }
+  chars.cutMap.writeValue(buf)
+    .then(function () {
+      var cs = document.querySelectorAll(".mapCell");
+      for (var j = 0; j < cs.length; j++) cs[j].classList.remove("dirty");
+      toast("マップを本体へ反映しました");
+    })
+    ["catch"](function (e) { toast("書き込み失敗: " + (e.message || e)); });
+});
+$("btnReloadMap").addEventListener("click", function () {
+  readMap()
+    .then(function () { toast("本体から再読込しました"); })
+    ["catch"](function (e) { toast("読込失敗: " + (e.message || e)); });
 });
 
 /* ---- APパスワード(暗号化Characteristic、アクセス時にペアリング要求が出る場合あり) ---- */
-$("btnWritePass").addEventListener("click", async () => {
-  const pw = $("inApPass").value;
+$("btnWritePass").addEventListener("click", function () {
+  var pw = $("inApPass").value;
   if (pw.length < 8 || pw.length > 63) { toast("8〜63文字で入力してください"); return; }
-  try {
-    await chars.apPass.writeValue(new TextEncoder().encode(pw));
-    toast("パスワードを変更・保存しました");
-  } catch (e) { toast("変更失敗: " + e.message); }
+  chars.apPass.writeValue(encodeText(pw))
+    .then(function () { toast("パスワードを変更・保存しました"); })
+    ["catch"](function (e) { toast("変更失敗: " + (e.message || e)); });
 });
-$("btnReadPass").addEventListener("click", async () => {
-  try {
-    const dv = await chars.apPass.readValue();
-    $("inApPass").value = new TextDecoder().decode(dv.buffer);
-    $("inApPass").type = "text";
-    toast("現在のパスワードを表示しました");
-  } catch (e) { toast("読込失敗: " + e.message); }
+$("btnReadPass").addEventListener("click", function () {
+  chars.apPass.readValue()
+    .then(function (dv) {
+      $("inApPass").value = decodeText(dv);
+      $("inApPass").type = "text";
+      toast("現在のパスワードを表示しました");
+    })
+    ["catch"](function (e) { toast("読込失敗: " + (e.message || e)); });
 });
 
 /* ---- コマンド ---- */
-async function sendCommand(code) {
-  await chars.command.writeValue(new Uint8Array([code]));
+function sendCommand(code) {
+  return chars.command.writeValue(new Uint8Array([code]));
 }
 
 // 2度押し確認: WKWebView(Bluefy)ではconfirm()ダイアログが表示されない既知の制約が
 // あるため、「1回目のタップで警告表示→3秒以内の2回目のタップで実行」方式にする。
 function requireDoubleTap(btn, warnText, action) {
-  const original = btn.textContent;
-  btn.addEventListener("click", () => {
+  var original = btn.textContent;
+  btn.addEventListener("click", function () {
     if (btn.classList.contains("confirming")) {
       btn.classList.remove("confirming");
       btn.textContent = original;
@@ -494,7 +550,7 @@ function requireDoubleTap(btn, warnText, action) {
     } else {
       btn.classList.add("confirming");
       btn.textContent = warnText;
-      btn._tm = setTimeout(() => {
+      btn._tm = setTimeout(function () {
         btn.classList.remove("confirming");
         btn.textContent = original;
       }, 3000);
@@ -502,24 +558,25 @@ function requireDoubleTap(btn, warnText, action) {
   });
 }
 
-$("btnSave").addEventListener("click", async () => {
-  try { await sendCommand(CMD.SAVE); toast("本体に保存しました"); }
-  catch (e) { toast("保存失敗: " + e.message); }
+$("btnSave").addEventListener("click", function () {
+  sendCommand(CMD.SAVE)
+    .then(function () { toast("本体に保存しました"); })
+    ["catch"](function (e) { toast("保存失敗: " + (e.message || e)); });
 });
-requireDoubleTap($("btnFactory"), "もう一度タップで初期化を実行", async () => {
-  try {
-    await sendCommand(CMD.FACTORY_RESET);
-    await readConfig();
-    await readMap();
-    $("inApPass").value = "";
-    toast("工場出荷リセットしました");
-  } catch (e) { toast("リセット失敗: " + e.message); }
+requireDoubleTap($("btnFactory"), "もう一度タップで初期化を実行", function () {
+  sendCommand(CMD.FACTORY_RESET)
+    .then(function () { return readConfig(); })
+    .then(function () { return readMap(); })
+    .then(function () {
+      $("inApPass").value = "";
+      toast("工場出荷リセットしました");
+    })
+    ["catch"](function (e) { toast("リセット失敗: " + (e.message || e)); });
 });
-requireDoubleTap($("btnOta"), "もう一度タップでOTA開始", async () => {
-  try {
-    await sendCommand(CMD.ENTER_OTA);
-    toast("OTAモード開始。Wi-Fi設定で「MQS-Setup」へ接続してください");
-  } catch (e) { toast("開始失敗: " + e.message); }
+requireDoubleTap($("btnOta"), "もう一度タップでOTA開始", function () {
+  sendCommand(CMD.ENTER_OTA)
+    .then(function () { toast("OTAモード開始。Wi-Fi設定で「MQS-Setup」へ接続してください"); })
+    ["catch"](function (e) { toast("開始失敗: " + (e.message || e)); });
 });
 
 // 診断用ビーコン: ここまで到達=メインスクリプト全体が正常に実行された

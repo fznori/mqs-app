@@ -113,6 +113,15 @@ table.map select { padding: 8px 2px; text-align: center; width: 100%; }
 #toast.show { opacity: 1; }
 .ver { text-align: center; color: var(--muted); font-size: .75em; margin-top: 4px; }
 ol.steps { font-size: .88em; line-height: 1.7; padding-left: 1.3em; color: var(--text); }
+
+/* JSエラー表示オーバーレイ(Bluefyには開発者ツールが無いため画面に直接表示する) */
+#errOverlay {
+  display: none; position: fixed; top: 0; left: 0; right: 0; z-index: 99;
+  background: #7a1013; color: #fff; font-size: .78em;
+  padding: 10px 12px; word-break: break-all;
+}
+/* 2度押し確認中のボタン */
+button.confirming { background: var(--warn); color: #000; }
 </style>
 </head>
 <body>
@@ -222,9 +231,25 @@ ol.steps { font-size: .88em; line-height: 1.7; padding-left: 1.3em; color: var(-
 </nav>
 
 <div id="toast"></div>
+<div id="errOverlay"></div>
 
 <script>
 "use strict";
+/* ---- エラー可視化(Bluefyデバッグ用): 発生したJSエラーを画面上部に表示する ---- */
+window.addEventListener("error", function (e) {
+  var el = document.getElementById("errOverlay");
+  if (el) {
+    el.textContent = "JSエラー: " + e.message + " (" + (e.filename || "") + ":" + e.lineno + ")";
+    el.style.display = "block";
+  }
+});
+window.addEventListener("unhandledrejection", function (e) {
+  var el = document.getElementById("errOverlay");
+  if (el) {
+    el.textContent = "Promiseエラー: " + (e.reason && e.reason.message ? e.reason.message : e.reason);
+    el.style.display = "block";
+  }
+});
 /* =========================================================
    BLE仕様(ファームウェア BleService.h と一致させること)
    ========================================================= */
@@ -449,12 +474,33 @@ $("btnReadPass").addEventListener("click", async () => {
 async function sendCommand(code) {
   await chars.command.writeValue(new Uint8Array([code]));
 }
+
+// 2度押し確認: WKWebView(Bluefy)ではconfirm()ダイアログが表示されない既知の制約が
+// あるため、「1回目のタップで警告表示→3秒以内の2回目のタップで実行」方式にする。
+function requireDoubleTap(btn, warnText, action) {
+  const original = btn.textContent;
+  btn.addEventListener("click", () => {
+    if (btn.classList.contains("confirming")) {
+      btn.classList.remove("confirming");
+      btn.textContent = original;
+      clearTimeout(btn._tm);
+      action();
+    } else {
+      btn.classList.add("confirming");
+      btn.textContent = warnText;
+      btn._tm = setTimeout(() => {
+        btn.classList.remove("confirming");
+        btn.textContent = original;
+      }, 3000);
+    }
+  });
+}
+
 $("btnSave").addEventListener("click", async () => {
   try { await sendCommand(CMD.SAVE); toast("本体に保存しました"); }
   catch (e) { toast("保存失敗: " + e.message); }
 });
-$("btnFactory").addEventListener("click", async () => {
-  if (!confirm("設定・マップ・Wi-Fiパスワードを工場出荷値に戻します。よろしいですか?")) return;
+requireDoubleTap($("btnFactory"), "もう一度タップで初期化を実行", async () => {
   try {
     await sendCommand(CMD.FACTORY_RESET);
     await readConfig();
@@ -463,10 +509,11 @@ $("btnFactory").addEventListener("click", async () => {
     toast("工場出荷リセットしました");
   } catch (e) { toast("リセット失敗: " + e.message); }
 });
-$("btnOta").addEventListener("click", async () => {
-  if (!confirm("OTAモードを開始します。この後、Wi-Fi設定で「MQS-Setup」へ接続してください。")) return;
-  try { await sendCommand(CMD.ENTER_OTA); toast("OTAモードを開始しました"); }
-  catch (e) { toast("開始失敗: " + e.message); }
+requireDoubleTap($("btnOta"), "もう一度タップでOTA開始", async () => {
+  try {
+    await sendCommand(CMD.ENTER_OTA);
+    toast("OTAモード開始。Wi-Fi設定で「MQS-Setup」へ接続してください");
+  } catch (e) { toast("開始失敗: " + e.message); }
 });
 </script>
 </body>

@@ -128,7 +128,7 @@ button.confirming { background: var(--warn); color: #000; }
 
 <header>
   <h1>MATRIX <span>QUICK SHIFTER</span></h1>
-  <div class="sub">MQS SETUP</div>
+  <div class="sub">MQS SETUP v3</div>
 </header>
 
 <div id="connBar"><div id="connDot"></div><span id="connText">未接続</span></div>
@@ -233,9 +233,9 @@ button.confirming { background: var(--warn); color: #000; }
 <div id="toast"></div>
 <div id="errOverlay"></div>
 
+<!-- エラー可視化(Bluefyデバッグ用)。メインスクリプトとは別ブロックに分離すること:
+     メイン側に構文エラーがあってもこちらは生き残り、エラーを表示できる。ES5のみで書く。 -->
 <script>
-"use strict";
-/* ---- エラー可視化(Bluefyデバッグ用): 発生したJSエラーを画面上部に表示する ---- */
 window.addEventListener("error", function (e) {
   var el = document.getElementById("errOverlay");
   if (el) {
@@ -250,6 +250,12 @@ window.addEventListener("unhandledrejection", function (e) {
     el.style.display = "block";
   }
 });
+</script>
+
+<script>
+"use strict";
+// 診断用ビーコン: メインスクリプトがどこまで実行されたかを接続バーに表示する
+document.getElementById("connText").textContent = "未接続 (JS起動中...)";
 /* =========================================================
    BLE仕様(ファームウェア BleService.h と一致させること)
    ========================================================= */
@@ -515,6 +521,9 @@ requireDoubleTap($("btnOta"), "もう一度タップでOTA開始", async () => {
     toast("OTAモード開始。Wi-Fi設定で「MQS-Setup」へ接続してください");
   } catch (e) { toast("開始失敗: " + e.message); }
 });
+
+// 診断用ビーコン: ここまで到達=メインスクリプト全体が正常に実行された
+document.getElementById("connText").textContent = "未接続 (JS正常)";
 </script>
 </body>
 </html>

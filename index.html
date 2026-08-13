@@ -4,7 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>MQS - Matrix Quick Shifter</title>
-<!-- v5: 診断版 - スクリプトを7ブロックへ分割し進行マーカーで故障箇所を特定する -->
+<!-- v1.0(正式版)
+     Bluefy互換性の必須要件(2026-08-13に実機検証で確立。変更しないこと):
+     ・スクリプトは複数の独立<script>ブロックに分割したまま維持する
+     ・"use strict"は使用しない
+     ・グローバル識別子はMQS_/mqs接頭辞付きのみ(Bluefy注入スクリプトとの衝突回避)
+     ・ES5構文のみ(async/await・アロー関数・const/let・分割代入は使用禁止)
+     ・confirm()/alert()は使用禁止(WKWebViewで表示されない)→2度押し確認方式を使う
+     単一ブロック+strict+無接頭辞の構成ではBluefyで全スクリプトが実行されなかった。 -->
 <style>
 /* =========================================================
    MQS 設定アプリ(Bluefy / Web Bluetooth用)
@@ -41,12 +48,6 @@ header .sub { color: var(--muted); font-size: .72em; letter-spacing: .3em; margi
 }
 #connDot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
 #connDot.on { background: var(--ok); }
-
-/* 診断用ステータスバー(v5診断版のみ。問題解決後に削除する) */
-#dbgBar {
-  background: #262629; color: #8f8; font-family: monospace;
-  font-size: .72em; padding: 4px 10px; word-break: break-all;
-}
 
 main { padding: 14px; max-width: 480px; margin: 0 auto; }
 .card {
@@ -134,11 +135,10 @@ ol.steps { font-size: .88em; line-height: 1.7; padding-left: 1.3em; color: var(-
 
 <header>
   <h1>MATRIX <span>QUICK SHIFTER</span></h1>
-  <div class="sub">MQS SETUP v5</div>
+  <div class="sub">MQS SETUP v1.0</div>
 </header>
 
 <div id="connBar"><div id="connDot"></div><span id="connText">未接続</span></div>
-<div id="dbgBar">boot:</div>
 
 <main>
 
@@ -241,19 +241,13 @@ ol.steps { font-size: .88em; line-height: 1.7; padding-left: 1.3em; color: var(-
 <div id="errOverlay"></div>
 
 <!-- ============================================================
-     v5診断版スクリプト構成(Bluefyでの実行失敗箇所を特定するため):
-     ・7個の独立ブロックに分割(ブロックは互いに独立して構文解析される)
-     ・各ブロック先頭で進行マーカー(S2〜S7)をdbgBarへ表示
-     ・"use strict"不使用、全グローバルにMQS_接頭辞(名前衝突対策)
-     ・S1のエラー表示は蓄積式(複数エラーを"/"区切りで表示)
+     スクリプト構成に関する注意(冒頭コメントのBluefy互換性要件を参照):
+     複数<script>ブロック分割・MQS_接頭辞・ES5構文・非strictは
+     Bluefyでの動作に必須のため、リファクタリングで統合しないこと。
      ============================================================ -->
 
-<!-- S1: エラー可視化+診断ヘルパー(最小限・確実に動く書き方のみ) -->
+<!-- S1: エラー可視化(Bluefyには開発者ツールが無いため、エラー時のみ画面上部に赤帯表示) -->
 <script>
-function mqsStage(label) {
-  var el = document.getElementById("dbgBar");
-  if (el) el.textContent = el.textContent + " " + label;
-}
 function mqsShowError(prefix, msg) {
   var el = document.getElementById("errOverlay");
   if (el) {
@@ -269,24 +263,10 @@ window.addEventListener("error", function (e) {
 window.addEventListener("unhandledrejection", function (e) {
   mqsShowError("Promiseエラー: ", (e.reason && e.reason.message ? e.reason.message : e.reason));
 });
-// タップ検知プローブ: 画面のどこかをタップしたとき、touch/clickイベントが
-// 実際に発火しているかをdbgBarに1回だけ表示する
-(function () {
-  var seen = {};
-  function probe(name) {
-    return function () {
-      if (!seen[name]) { seen[name] = true; mqsStage("[" + name + "検知]"); }
-    };
-  }
-  document.addEventListener("touchstart", probe("touch"), true);
-  document.addEventListener("click", probe("click"), true);
-})();
-mqsStage("S1");
 </script>
 
 <!-- S2: 定数定義(ファームウェア BleService.h / Config.h と一致させること) -->
 <script>
-mqsStage("S2");
 var MQS_UUID = {
   service:    "03499168-8788-477c-9319-e68a1b015315",
   status:     "6182d01c-26e5-4ac4-b195-911e782212dc",
@@ -311,7 +291,6 @@ var MQS_device = null, MQS_chars = {};
 
 <!-- S3: 汎用ヘルパー -->
 <script>
-mqsStage("S3");
 function mqs$(id) { return document.getElementById(id); }
 function mqsToast(msg) {
   var t = mqs$("toast");
@@ -337,7 +316,6 @@ function mqsEncodeText(str) {
 
 <!-- S4: タブ切り替え+UI構築 -->
 <script>
-mqsStage("S4");
 (function () {
   var btns = document.querySelectorAll("nav button");
   function activate(btn) {
@@ -393,7 +371,6 @@ document.addEventListener("change", function (e) {
 
 <!-- S5: 接続状態UI+Status通知+読み出し処理 -->
 <script>
-mqsStage("S5");
 function mqsSetConnectedUi(on) {
   var ids = ["btnWriteConfig","btnWritePass","btnReadPass","btnSave","btnFactory",
              "btnWriteMap","btnReloadMap","btnOta"];
@@ -464,7 +441,6 @@ function mqsReadMap() {
 
 <!-- S6: 接続/切断ボタン -->
 <script>
-mqsStage("S6");
 mqs$("btnConnect").addEventListener("click", function () {
   if (!navigator.bluetooth) {
     mqsToast("このブラウザはWeb Bluetooth非対応です(Bluefyで開いてください)");
@@ -523,7 +499,6 @@ mqs$("btnDisconnect").addEventListener("click", function () {
 
 <!-- S7: 書き込み系ハンドラ+コマンド -->
 <script>
-mqsStage("S7");
 mqs$("btnWriteConfig").addEventListener("click", function () {
   var payload = new Uint8Array([Number(mqs$("selCool").value), Number(mqs$("selDelay").value)]);
   MQS_chars.config.writeValue(payload)
@@ -618,9 +593,6 @@ mqsRequireDoubleTap(mqs$("btnOta"), "もう一度タップでOTA開始", functio
     ["catch"](function (e) { mqsToast("開始失敗: " + (e.message || e)); });
 });
 
-// ここまで到達=全スクリプトが正常に実行された
-mqsStage("完");
-mqs$("connText").textContent = "未接続 (JS正常)";
 </script>
 </body>
 </html>
